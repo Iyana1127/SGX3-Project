@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 import pandas as pd
 import os
 
+
 # Define your global DataFrame
 traffic_df = None
 
@@ -94,6 +95,162 @@ def get_unique_values():
         "column": column,
         "unique_values": unique_values,
         "unique_count": unique_count
+    })
+
+@app.route("/FilterByYear")
+def filter_by_year():
+    global traffic_df
+    column_name = request.args.get("ColumnName")
+    column_value = request.args.get("ColumnValue")
+    year = request.args.get("Year")
+
+    if traffic_df is None:
+        return jsonify({"error": "Data not loaded"}), 500
+
+    if column_name not in traffic_df.columns:
+        return jsonify({"error": f"Column '{column_name}' not found"}), 400
+
+    if year is None or not year.isdigit():
+        return jsonify({"error": "Invalid or missing 'Year' parameter"}), 400
+
+    # Try to identify the datetime column
+    date_column = None
+    for col in traffic_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(traffic_df[col]):
+            date_column = col
+            break
+    if date_column is None:
+        # Try to parse a column if none are datetime yet
+        for col in traffic_df.columns:
+            try:
+                traffic_df[col] = pd.to_datetime(traffic_df[col])
+                date_column = col
+                break
+            except Exception:
+                continue
+    if date_column is None:
+        return jsonify({"error": "No datetime column found"}), 400
+
+    # Filter data
+    filtered = traffic_df[
+        (traffic_df[column_name] == column_value) &
+        (traffic_df[date_column].dt.year == int(year))
+    ]
+
+    return jsonify({
+        "column": column_name,
+        "value": column_value,
+        "year": int(year),
+        "match_count": len(filtered),
+        "matches": filtered.to_dict(orient="records")
+    })
+
+
+@app.route("/FilterByHourRange")
+def filter_by_hour_range():
+    global traffic_df
+
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    if not start or not end:
+        return jsonify({"error": "Missing 'start' or 'end' query parameter"}), 400
+
+    try:
+        start = int(start)
+        end = int(end)
+    except ValueError:
+        return jsonify({"error": "Start and end must be integers"}), 400
+
+    if "Published Date" not in traffic_df.columns:
+        return jsonify({"error": "'Published Date' column not found"}), 500
+
+    # Ensure 'Published Date' is datetime
+    if not pd.api.types.is_datetime64_any_dtype(traffic_df["Published Date"]):
+        try:
+            traffic_df["Published Date"] = pd.to_datetime(traffic_df["Published Date"])
+        except Exception as e:
+            return jsonify({"error": f"Failed to parse 'Published Date': {str(e)}"}), 500
+
+    filtered = traffic_df[
+        traffic_df["Published Date"].dt.hour.between(start, end)
+    ]
+
+    results = filtered.head(100).copy()
+    results = results.fillna("")
+    results["Published Date"] = results["Published Date"].astype(str)
+
+    return jsonify({
+        "start_hour": start,
+        "end_hour": end,
+        "match_count": len(filtered),
+        "matches": results.to_dict(orient="records")  # limit to 100 for safety
+    })
+
+@app.route("/Nearby")
+def filter_by_proximity():
+    global traffic_df
+
+    lat = request.args.get("lat")
+    lon = request.args.get("lon")
+
+    if not lat or not lon:
+        return jsonify({"error": "Missing 'lat' or 'lon' query parameters"}), 400
+
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except ValueError:
+        return jsonify({"error": "Latitude and Longitude must be numeric"}), 400
+
+    if "Latitude" not in traffic_df.columns or "Longitude" not in traffic_df.columns:
+        return jsonify({"error": "Dataset must contain 'Latitude' and 'Longitude' columns"}), 500
+
+    if "Published Date" not in traffic_df.columns:
+        return jsonify({"error": "'Published Date' column not found"}), 500
+
+    # Ensure 'Published Date' is datetime
+    if not pd.api.types.is_datetime64_any_dtype(traffic_df["Published Date"]):
+        try:
+            traffic_df["Published Date"] = pd.to_datetime(traffic_df["Published Date"])
+        except Exception as e:
+            return jsonify({"error": f"Failed to parse 'Published Date': {str(e)}"}), 500
+
+    # Haversine distance calculation
+    def haversine_distance(row):
+        try:
+            lat2 = float(row["Latitude"])
+            lon2 = float(row["Longitude"])
+            if pd.isna(lat2) or pd.isna(lon2):
+                return float("inf")  # Skip rows with missing data
+        except Exception:
+            return float("inf")
+
+        # Haversine formula
+        from math import radians, cos, sin, asin, sqrt
+        lon1, lat1, lon2, lat2 = map(radians, [lon, lat, lon2, lat2])
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a))
+        return 6371 * c  # km
+
+    # Apply haversine safely
+    df = traffic_df.copy()
+    df["DistanceKM"] = df.apply(haversine_distance, axis=1)
+
+    nearby = df[df["DistanceKM"] <= 1.0]
+
+    results = nearby.head(100).copy()
+    results = results.fillna("")
+    results["Published Date"] = results["Published Date"].astype(str)
+
+    return jsonify({
+        "lat": lat,
+        "lon": lon,
+        "radius_km": 1.0,
+        "match_count": len(nearby),
+        "matches": results.drop(columns=["DistanceKM"]).to_dict(orient="records")
     })
 
 
