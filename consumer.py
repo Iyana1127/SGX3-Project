@@ -1,14 +1,22 @@
 import requests
 
+lat = 30.2895
+lon = -97.7368
+year = 2024
 
-response = requests.get("http://35.206.76.195:8067/head?count=10")
+try:
+    url = "http://localhost:8067/FilterByHourRange?start=7&end=9"
+    params = {"lat": lat, "lon": lon, "year": year}
+    response = requests.get(url, params=params)
 
+    print(f"status Code: {response.status_code}")
+    print("Headers:", response.headers)
 
-#Check to see if it works!
-print(response.status_code)
-print(response.headers)
+    data = response.json()
+    print("Response Type:", type(data))
+    print("Response Data:", data)
 
-#view data
-data = response.json()
-print (type(data))
-print (data)
+except requests.exceptions.RequestException as e:
+    print(f"Request failed: {e}")
+except ValueError as e:
+    print(f"Failed to parse JSON: {e}")

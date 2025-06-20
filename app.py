@@ -251,8 +251,19 @@ def filter_by_proximity():
         "radius_km": 1.0,
         "match_count": len(nearby),
         "matches": results.drop(columns=["DistanceKM"]).to_dict(orient="records")
-    })
+        })
 
+def load_traffic_data():
+    global traffic_df
+    print("Loading Austin Traffic Data...")
+    traffic_df = pd.read_csv("atxtraffic.csv")
+
+    # Clean data
+    traffic_df = traffic_df.dropna(subset=["Latitude", "Longitude", "Published Date"])
+    traffic_df["Published Date"] = pd.to_datetime(traffic_df["Published Date"],
+                                                  errors="coerce")
+    traffic_df = traffic_df.dropna(subset=["Published Date"])
+    print(f"Cleaned and loaded {len(traffic_df)} rows into memory.")
 
 if __name__ == "__main__":
     load_traffic_data()  # <- This runs BEFORE the server starts
