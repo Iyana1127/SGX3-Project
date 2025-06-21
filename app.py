@@ -1,12 +1,19 @@
 from flask import Flask, jsonify, request
 import pandas as pd
 import os
-
+from hotqueue import HotQueue
+from redis import Redis
+import uuid
 
 # Define your global DataFrame
 traffic_df = None
 
 app = Flask(__name__)
+
+redis_conn = Redis(host="localhost", port=8067)
+q = HotQueue("queue", host="localhost", port=8067, db=1)
+job_store = Redis(host="localhost", port=8067, db=2)
+
 
 def load_traffic_data():
     global traffic_df
@@ -264,6 +271,33 @@ def load_traffic_data():
                                                   errors="coerce")
     traffic_df = traffic_df.dropna(subset=["Published Date"])
     print(f"Cleaned and loaded {len(traffic_df)} rows into memory.")
+
+@app.route("/jobs", methods=["POST"])
+def create_job():
+    job_type = request.json.get("type", "rush_hour_2024")
+    job_id = str(uuid.uuid4())
+    job_data = {
+        "id": job_id,
+        "status": "submitted",
+        "type": job_type
+    }
+    job_store.hset(job_id, mapping=job_data)
+    q.put(job_id)
+    return jsonify({"job_id": job_id, "status": "submitted"}), 202
+
+@app.route("/jobs/<job_id>", methods=["GET"])
+def get_job_status(job_id):
+    job = job_store.hgetall(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return {k.decode(): v.decode() for k, v in job.items()}
+
+@app.route("/results/<job_id>", methods=["GET"])
+def get_job_result(job_id):
+    result = redis_conn.get(f"result:{job_id}")
+    if not result:
+        return jsonify({"error": "Result not available yet"}), 202
+    return jsonify({"job_id": job_id, "result": result.decode()})
 
 if __name__ == "__main__":
     load_traffic_data()  # <- This runs BEFORE the server starts
